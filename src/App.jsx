@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } fr
 import { api, preparePhoto, thumbUrl, isUsingOldDatabase } from './db.js';
 import { STAGES, WORK_STAGES, stageLabel, nextStage } from './config.js';
 import { Icon } from './icons.jsx';
+import Cropper from './Cropper.jsx';
 
 const nowIso = () => new Date().toISOString();
 const LS_TAB = 'pots.tab';
@@ -154,6 +155,7 @@ export default function App() {
     const isPrimary = !photos.some((ph) => ph.piece_id === p.id);
     const row = await api.addPhoto(p.id, blobs, isPrimary);
     setPhotos((phs) => [...phs.map((x) => (isPrimary && x.piece_id === p.id ? { ...x, is_primary: false } : x)), row]);
+    return row;
   }
   async function setPrimary(p, ph) {
     setPhotos((phs) => phs.map((x) => (x.piece_id === p.id ? { ...x, is_primary: x.id === ph.id } : x)));
@@ -775,6 +777,7 @@ function PieceSheet({ piece: p, photos, extras, onClose, onPatch, onStage, onSta
   const fileRef = useRef();
   const [busy, setBusy] = useState(false);
   const [viewer, setViewer] = useState(null);
+  const [crop, setCrop] = useState(null); // { file, replace?: photo }
   const isIdea = p.stage === 'idea';
   const sorted = [...photos].sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0));
   const history = STAGES.filter((s) => p.stage_dates?.[s.key]).map((s) => [s.label, p.stage_dates[s.key]]);
@@ -802,19 +805,33 @@ function PieceSheet({ piece: p, photos, extras, onClose, onPatch, onStage, onSta
           type="file"
           accept="image/*"
           hidden
-          onChange={async (e) => {
+          onChange={(e) => {
             const f = e.target.files?.[0];
             e.target.value = '';
-            if (!f) return;
+            if (f) setCrop({ file: f });
+          }}
+        />
+      </div>
+      {crop && (
+        <Cropper
+          file={crop.file}
+          onCancel={() => setCrop(null)}
+          onDone={async (blob) => {
+            const old = crop.replace;
+            setCrop(null);
             setBusy(true);
             try {
-              await onAddPhoto(f);
+              const row = await onAddPhoto(blob);
+              if (old) {
+                if (old.is_primary && row) await onSetPrimary(row);
+                await onRemovePhoto(old);
+              }
             } finally {
               setBusy(false);
             }
           }}
         />
-      </div>
+      )}
 
       {isIdea ? (
         <div className="row-btns">
@@ -901,6 +918,19 @@ function PieceSheet({ piece: p, photos, extras, onClose, onPatch, onStage, onSta
         <div className="viewer" onClick={() => setViewer(null)}>
           <img src={viewer.url} alt="" />
           <div className="viewer-btns" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="btn small"
+              onClick={async () => {
+                const ph = viewer;
+                setViewer(null);
+                try {
+                  const b = await fetch(ph.url).then((r) => r.blob());
+                  setCrop({ file: b, replace: ph });
+                } catch {}
+              }}
+            >
+              Crop
+            </button>
             {!viewer.is_primary && (
               <button
                 className="btn small"
@@ -940,6 +970,8 @@ function AddSheet({ mode, extras, onClose, onCreate }) {
   const [commission, setCommission] = useState(false);
   const [due, setDue] = useState('');
   const [file, setFile] = useState(null);
+  const [cropFile, setCropFile] = useState(null);
+  const preview = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const ref = useRef();
@@ -998,9 +1030,28 @@ function AddSheet({ mode, extras, onClose, onCreate }) {
           )}
         </div>
         <label className="btn ghost file">
-          <Icon name="camera" /> {file ? file.name.slice(0, 24) : 'Add a photo'}
-          <input type="file" accept="image/*" hidden onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          {preview ? <img className="file-preview" src={preview} alt="" /> : <Icon name="camera" />} {file ? 'Change photo' : 'Add a photo'}
+          <input
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) setCropFile(f);
+            }}
+          />
         </label>
+        {cropFile && (
+          <Cropper
+            file={cropFile}
+            onCancel={() => setCropFile(null)}
+            onDone={(b) => {
+              setFile(b);
+              setCropFile(null);
+            }}
+          />
+        )}
         {err && <p className="err">{err}</p>}
         <div className="row-btns">
           <button type="button" className="btn" onClick={onClose}>
