@@ -416,7 +416,7 @@ function Works({ pieces, photoFor, onOpen, onNext, onMove, loading, error, onRet
   const shown = drag ? [...groups, { key: 'completed', label: 'Completed', items: [] }] : groups.filter((g) => g.items.length);
   return (
     <main className={`screen ${drag ? 'is-dragging' : ''}`}>
-      <Header title="Current Works" sub={drag ? `Drop ${drag.piece.title} on a stage` : loading ? 'Loading…' : `${work.length} piece${work.length === 1 ? '' : 's'} in progress · hold to drag`} onSettings={onSettings} />
+      <Header title="Current Works" sub={drag ? `Drop ${drag.piece.title} on a stage` : loading ? 'Loading…' : `${work.length} in progress`} onSettings={onSettings} />
       {error && (
         <div className="notice">
           <p>Couldn't load your pieces. {error}</p>
@@ -430,14 +430,17 @@ function Works({ pieces, photoFor, onOpen, onNext, onMove, loading, error, onRet
             <span>{g.key === 'completed' ? 'completed ✓' : g.label.toLowerCase()}</span>
             {g.key !== 'completed' && <span className="count">{g.items.length}</span>}
           </h2>
-          {g.items.map((p) => (
-            <WorkCard key={p.id} p={p} photo={photoFor[p.id]} lifted={drag?.piece.id === p.id} handlers={bind(p)} onOpen={() => onOpen(p.id)} onNext={() => onNext(p, nextStage(p.stage).key)} />
-          ))}
+          {g.items.length > 0 && (
+            <div className="group">
+              {g.items.map((p) => (
+                <WorkCard key={p.id} p={p} photo={photoFor[p.id]} lifted={drag?.piece.id === p.id} handlers={bind(p)} onOpen={() => onOpen(p.id)} onNext={() => onNext(p, nextStage(p.stage).key)} />
+              ))}
+            </div>
+          )}
           {drag && !g.items.length && <div className="drop-hint">{g.key === 'completed' ? 'Drop here when it’s out of the kiln' : 'Drop here'}</div>}
         </section>
       ))}
-      {!drag && empty.length > 0 && work.length > 0 && <p className="empties">Empty: {empty.map((g) => g.label.toLowerCase()).join(' · ')}</p>}
-      {drag && (
+            {drag && (
         <div className="drag-ghost" style={{ width: drag.w, transform: `translate(${drag.x - drag.dx}px, ${drag.y - drag.dy}px) rotate(-1.5deg)` }}>
           <WorkCard p={drag.piece} photo={photoFor[drag.piece.id]} ghost />
         </div>
@@ -450,23 +453,27 @@ function WorkCard({ p, photo, onOpen, onNext, handlers, lifted, ghost }) {
   const n = nextStage(p.stage);
   const since = stageSince(p);
   const due = dueInfo(p);
+  const meta = [since && ago(since), p.description].filter(Boolean).join(' · ');
   return (
     <div className={`card ${lifted ? 'lifted' : ''}`}>
       <button className="card-main" onClick={onOpen} {...handlers}>
-        {photo ? <img className="thumb" src={photo.url} alt="" loading="lazy" draggable={false} /> : <span className="thumb ph">{p.title.charAt(0).toUpperCase()}</span>}
+        {photo && <img className="thumb" src={photo.url} alt="" loading="lazy" draggable={false} />}
         <span className="card-text">
-          <span className="title">{p.title}</span>
-          <span className="meta">
-            {[p.description, since && ago(since), p.glaze].filter(Boolean).join(' · ')}
-            {p.is_commission && <em className="tag">commission</em>}
-            {due && <em className={`tag ${due.urgent ? 'urgent' : ''}`}>{due.label}</em>}
+          <span className="title">
+            {p.title}
+            {p.is_commission && <span className="dot" title="Commission" />}
           </span>
+          {(meta || due) && (
+            <span className="meta">
+              {meta}
+              {due?.urgent && <em className="tag urgent">{due.label}</em>}
+            </span>
+          )}
         </span>
       </button>
       {n && !ghost && (
-        <button className="next" onClick={onNext} aria-label={`Move ${p.title} to ${n.label}`}>
+        <button className="next" onClick={onNext} aria-label={`Move ${p.title} to ${n.label}`} title={`Move to ${n.label}`}>
           <Icon name="arrow" />
-          <span>{n.key === 'completed' ? 'Done' : n.label.split(' ')[0]}</span>
         </button>
       )}
     </div>
@@ -482,7 +489,7 @@ function Gallery({ pieces, photoFor, onOpen, onSettings }) {
     .sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''));
   return (
     <main className="screen">
-      <Header title="Gallery" sub={`${pieces.length} finished pieces`} onSettings={onSettings}>
+      <Header title="Gallery" sub={`${pieces.length} finished`} onSettings={onSettings}>
         <div className="search">
           <Icon name="search" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search finished work" />
@@ -491,7 +498,6 @@ function Gallery({ pieces, photoFor, onOpen, onSettings }) {
           {[
             ['all', 'All'],
             ['commissions', 'Commissions'],
-            ['photos', 'Needs photo'],
           ].map(([k, l]) => (
             <button key={k} className={`chip ${filter === k ? 'on' : ''}`} onClick={() => setFilter(k)}>
               {l}
@@ -516,18 +522,19 @@ function Ideas({ pieces, onOpen, onSettings }) {
   const list = [...pieces].sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
   return (
     <main className="screen">
-      <Header title="Ideas" sub={`${list.length} ideas · ${list.filter((p) => p.is_commission).length} commissions`} onSettings={onSettings} />
-      <div className="ideas">
+      <Header title="Ideas" sub={`${list.length} ideas`} onSettings={onSettings} />
+      <div className="group ideas">
         {list.map((p) => {
           const due = dueInfo(p);
           return (
             <button key={p.id} className="idea" onClick={() => onOpen(p.id)}>
-              <span className="title">{p.title}</span>
-              {(p.description || p.is_commission || due) && (
+              <span className="title">
+                {p.title}
+                {p.is_commission && <span className="dot" title="Commission" />}
+              </span>
+              {(p.description || due) && (
                 <span className="meta">
-                  {p.description}
-                  {p.is_commission && <em className="tag">commission</em>}
-                  {due && <em className={`tag ${due.urgent ? 'urgent' : ''}`}>{due.label}</em>}
+                  {[p.description, due?.label].filter(Boolean).join(' · ')}
                 </span>
               )}
             </button>
@@ -680,9 +687,9 @@ function PieceSheet({ piece: p, photos, extras, onClose, onPatch, onStage, onSta
       ) : (
         <>
           <h3>Stage</h3>
-          <div className="stages">
+          <div className="chips wrap">
             {STAGES.map((s) => (
-              <button key={s.key} className={`stage-btn ${p.stage === s.key ? 'on' : ''}`} onClick={() => onStage(s.key)}>
+              <button key={s.key} className={`chip ${p.stage === s.key ? 'on' : ''}`} onClick={() => onStage(s.key)}>
                 {s.label}
               </button>
             ))}
@@ -690,7 +697,6 @@ function PieceSheet({ piece: p, photos, extras, onClose, onPatch, onStage, onSta
         </>
       )}
 
-      <h3>Details</h3>
       <Field label="Notes">
         <SaveInput multiline value={p.description} onSave={(v) => onPatch({ description: v })} placeholder="Who it's for, size, anything" />
       </Field>
