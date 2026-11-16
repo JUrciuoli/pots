@@ -257,3 +257,10 @@ h1 { font-size: 28px; }
 /* drag zones stay calm */
 .stage.drop { padding: 4px 6px 2px; }
 .drop-hint { padding: 12px; font-size: 15px; }
+
+/* idea reordering */
+.idea { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; position: relative; }
+.ideas.sorting { overflow: visible; }
+.ideas.sorting .idea { transition: transform 0.18s ease; }
+.ideas.sorting .idea.lifted-row { transition: none; z-index: 5; background: var(--card); box-shadow: 0 10px 28px rgba(20, 78, 158, 0.22); border: 1px solid var(--line); }
+.foot-link { display: block; margin: 28px auto 0; font-family: var(--sans); text-transform: uppercase; letter-spacing: 0.18em; font-size: 10px; color: var(--muted); }

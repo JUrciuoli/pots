@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { api, resizeImage, getConfig, setConfig, isUsingOldDatabase } from './db.js';
+import { api, preparePhoto, thumbUrl, isUsingOldDatabase } from './db.js';
 import { STAGES, WORK_STAGES, stageLabel, nextStage } from './config.js';
 import { Icon } from './icons.jsx';
 
@@ -42,7 +42,7 @@ export default function App() {
   const [tab, setTab] = useState(() => localStorage.getItem(LS_TAB) || 'works');
   const [openId, setOpenId] = useState(null);
   const [adding, setAdding] = useState(null); // 'work' | 'idea'
-  const [settings, setSettings] = useState(false);
+  const [scrapOpen, setScrapOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const toastTimer = useRef();
 
@@ -150,9 +150,9 @@ export default function App() {
   }
 
   async function addPhoto(p, file) {
-    const blob = await resizeImage(file);
+    const blobs = await preparePhoto(file);
     const isPrimary = !photos.some((ph) => ph.piece_id === p.id);
-    const row = await api.addPhoto(p.id, blob, isPrimary);
+    const row = await api.addPhoto(p.id, blobs, isPrimary);
     setPhotos((phs) => [...phs.map((x) => (isPrimary && x.piece_id === p.id ? { ...x, is_primary: false } : x)), row]);
   }
   async function setPrimary(p, ph) {
@@ -164,19 +164,30 @@ export default function App() {
     await api.deletePhoto(ph);
   }
 
+  async function reorderIdeas(ordered) {
+    const changes = ordered.map((p, i) => [p, i]).filter(([p, i]) => p.display_order !== i);
+    setPieces((ps) => ps.map((x) => { const j = ordered.findIndex((o) => o.id === x.id); return j >= 0 ? { ...x, display_order: j } : x; }));
+    try {
+      await Promise.all(changes.map(([p, i]) => api.updatePiece(p.id, { display_order: i })));
+    } catch (e) {
+      showToast(`Couldn't save the order: ${e.message}`);
+      load();
+    }
+  }
+
   const open = pieces.find((p) => p.id === openId);
   const needsSignIn = session === null && !loading && !error && live.length === 0 && !isUsingOldDatabase();
 
   return (
     <div className="app">
       {needsSignIn ? (
-        <SignIn onOpenSettings={() => setSettings(true)} />
+        <SignIn />
       ) : tab === 'works' ? (
-        <Works pieces={live} photoFor={photoFor} onOpen={setOpenId} onNext={moveStage} onMove={moveStage} loading={loading} error={error} onRetry={load} onSettings={() => setSettings(true)} />
+        <Works pieces={live} photoFor={photoFor} onOpen={setOpenId} onNext={moveStage} onMove={moveStage} loading={loading} error={error} onRetry={load} />
       ) : tab === 'gallery' ? (
-        <Gallery pieces={live.filter((p) => p.stage === 'completed')} photoFor={photoFor} onOpen={setOpenId} onSettings={() => setSettings(true)} />
+        <Gallery pieces={live.filter((p) => p.stage === 'completed')} photoFor={photoFor} onOpen={setOpenId} scrappedCount={pieces.filter((p) => p.is_graveyard).length} onScrapped={() => setScrapOpen(true)} />
       ) : (
-        <Ideas pieces={live.filter((p) => p.stage === 'idea')} onOpen={setOpenId} onSettings={() => setSettings(true)} />
+        <Ideas pieces={live.filter((p) => p.stage === 'idea')} onOpen={setOpenId} onReorder={reorderIdeas} />
       )}
 
       {tab !== 'gallery' && !needsSignIn && (
@@ -245,20 +256,20 @@ export default function App() {
         />
       )}
 
-      {settings && (
-        <Settings
-          session={session}
-          scrapped={pieces.filter((p) => p.is_graveyard)}
-          pieces={pieces}
-          photos={photos}
-          extras={api.hasExtras()}
-          onOpen={(id) => {
-            setSettings(false);
-            setOpenId(id);
-          }}
-          onClose={() => setSettings(false)}
-          onReload={load}
-        />
+      {scrapOpen && (
+        <Sheet onClose={() => setScrapOpen(false)} label="Scrapped">
+          <h2 className="sheet-title">Scrapped</h2>
+          <div className="group">
+            {pieces
+              .filter((p) => p.is_graveyard)
+              .map((p) => (
+                <button key={p.id} className="idea" onClick={() => { setScrapOpen(false); setOpenId(p.id); }}>
+                  <span className="title">{p.title}</span>
+                  <span className="meta">{stageLabel(p.stage)}</span>
+                </button>
+              ))}
+          </div>
+        </Sheet>
       )}
 
       {toast && (
@@ -273,7 +284,7 @@ export default function App() {
 
 /* ---------------- screens ---------------- */
 
-function Header({ title, sub, onSettings, children }) {
+function Header({ title, sub, children }) {
   return (
     <header className="hdr">
       <div className="hdr-row">
@@ -281,9 +292,6 @@ function Header({ title, sub, onSettings, children }) {
           <h1>{title}</h1>
           {sub && <p className="sub">{sub}</p>}
         </div>
-        <button className="icon-btn" aria-label="Settings" onClick={onSettings}>
-          <Icon name="gear" />
-        </button>
       </div>
       {children}
     </header>
@@ -408,7 +416,7 @@ function useStageDrag(onDrop) {
   return { drag, bind };
 }
 
-function Works({ pieces, photoFor, onOpen, onNext, onMove, loading, error, onRetry, onSettings }) {
+function Works({ pieces, photoFor, onOpen, onNext, onMove, loading, error, onRetry }) {
   const work = pieces.filter((p) => p.stage !== 'completed' && p.stage !== 'idea');
   const { drag, bind } = useStageDrag((p, stage) => onMove(p, stage));
   const groups = WORK_STAGES.map((s) => ({ ...s, items: work.filter((p) => p.stage === s.key).sort((a, b) => (stageSince(a) || a.created_at).localeCompare(stageSince(b) || b.created_at)) }));
@@ -416,7 +424,7 @@ function Works({ pieces, photoFor, onOpen, onNext, onMove, loading, error, onRet
   const shown = drag ? [...groups, { key: 'completed', label: 'Completed', items: [] }] : groups.filter((g) => g.items.length);
   return (
     <main className={`screen ${drag ? 'is-dragging' : ''}`}>
-      <Header title="Current Works" sub={drag ? `Drop ${drag.piece.title} on a stage` : loading ? 'Loading…' : `${work.length} in progress`} onSettings={onSettings} />
+      <Header title="Current Works" sub={drag ? `Drop ${drag.piece.title} on a stage` : loading ? 'Loading…' : `${work.length} in progress`} />
       {error && (
         <div className="notice">
           <p>Couldn't load your pieces. {error}</p>
@@ -457,7 +465,7 @@ function WorkCard({ p, photo, onOpen, onNext, handlers, lifted, ghost }) {
   return (
     <div className={`card ${lifted ? 'lifted' : ''}`}>
       <button className="card-main" onClick={onOpen} {...handlers}>
-        {photo && <img className="thumb" src={photo.url} alt="" loading="lazy" draggable={false} />}
+        {photo && <Img className="thumb" url={photo.url} draggable={false} />}
         <span className="card-text">
           <span className="title">
             {p.title}
@@ -480,7 +488,7 @@ function WorkCard({ p, photo, onOpen, onNext, handlers, lifted, ghost }) {
   );
 }
 
-function Gallery({ pieces, photoFor, onOpen, onSettings }) {
+function Gallery({ pieces, photoFor, onOpen, scrappedCount, onScrapped }) {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('all');
   const list = pieces
@@ -489,7 +497,7 @@ function Gallery({ pieces, photoFor, onOpen, onSettings }) {
     .sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || ''));
   return (
     <main className="screen">
-      <Header title="Gallery" sub={`${pieces.length} finished`} onSettings={onSettings}>
+      <Header title="Gallery" sub={`${pieces.length} finished`}>
         <div className="search">
           <Icon name="search" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search finished work" />
@@ -508,35 +516,171 @@ function Gallery({ pieces, photoFor, onOpen, onSettings }) {
       <div className="grid">
         {list.map((p) => (
           <button key={p.id} className="tile" onClick={() => onOpen(p.id)}>
-            {photoFor[p.id] ? <img src={photoFor[p.id].url} alt="" loading="lazy" /> : <span className="ph">{p.title.charAt(0).toUpperCase()}</span>}
+            {photoFor[p.id] ? <Img url={photoFor[p.id].url} /> : <span className="ph">{p.title.charAt(0).toUpperCase()}</span>}
             <span className="tile-name">{p.title}</span>
           </button>
         ))}
       </div>
       {list.length === 0 && <p className="empty-big">Nothing here.</p>}
+      {scrappedCount > 0 && (
+        <button className="foot-link" onClick={onScrapped}>
+          Scrapped ({scrappedCount})
+        </button>
+      )}
     </main>
   );
 }
 
-function Ideas({ pieces, onOpen, onSettings }) {
+/* Shows the small thumbnail; falls back to the full photo if there isn't one. */
+function Img({ url, className, ...rest }) {
+  const [src, setSrc] = useState(() => thumbUrl(url));
+  useEffect(() => setSrc(thumbUrl(url)), [url]);
+  return <img className={className} src={src} alt="" loading="lazy" decoding="async" onError={() => src !== url && setSrc(url)} {...rest} />;
+}
+
+/* Press and hold (touch) or drag (mouse) a row to move it up or down. */
+function useReorder(items, onCommit) {
+  const [drag, setDrag] = useState(null); // { id, from, to, startY, y, rows:[{top,h}] }
+  const st = useRef({});
+  const dragRef = useRef(null);
+  dragRef.current = drag;
+  const listRef = useRef();
+
+  useEffect(() => {
+    if (!drag) return;
+    const block = (e) => e.cancelable && e.preventDefault();
+    document.addEventListener('touchmove', block, { passive: false });
+    document.body.classList.add('dragging');
+    let raf;
+    const tick = () => {
+      const d = dragRef.current;
+      if (d) {
+        const top = 100, bottom = window.innerHeight - 130;
+        let dy = 0;
+        if (d.y < top) dy = -Math.min(12, Math.ceil((top - d.y) / 5));
+        else if (d.y > bottom) dy = Math.min(12, Math.ceil((d.y - bottom) / 5));
+        if (dy) {
+          window.scrollBy(0, dy);
+          setDrag((v) => v && { ...v, scroll: window.scrollY });
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      document.removeEventListener('touchmove', block);
+      document.body.classList.remove('dragging');
+      cancelAnimationFrame(raf);
+    };
+  }, [!!drag]);
+
+  function begin(id, y) {
+    const rows = [...listRef.current.children].map((el) => {
+      const r = el.getBoundingClientRect();
+      return { top: r.top + window.scrollY, h: r.height };
+    });
+    const from = items.findIndex((p) => p.id === id);
+    navigator.vibrate?.(12);
+    setDrag({ id, from, to: from, startY: y + window.scrollY, y, scroll: window.scrollY, rows });
+  }
+  function targetIndex(d, y) {
+    const docY = y + window.scrollY;
+    const r = d.rows[d.from];
+    const center = r.top + r.h / 2 + (docY - d.startY);
+    // count rows (other than the dragged one) whose middle is above the dragged row's middle
+    let t = 0;
+    for (let i = 0; i < d.rows.length; i++) {
+      if (i === d.from) continue;
+      if (center > d.rows[i].top + d.rows[i].h / 2) t++;
+    }
+    return t;
+  }
+  function bind(p) {
+    return {
+      onPointerDown(e) {
+        if (e.button !== 0) return;
+        const s = (st.current = { id: e.pointerId, x0: e.clientX, y0: e.clientY, mouse: e.pointerType === 'mouse', el: e.currentTarget });
+        if (!s.mouse) s.timer = setTimeout(() => begin(p.id, s.y0), 320);
+      },
+      onPointerMove(e) {
+        const s = st.current;
+        if (s.id !== e.pointerId) return;
+        if (!dragRef.current) {
+          if (Math.hypot(e.clientX - s.x0, e.clientY - s.y0) > 8) {
+            clearTimeout(s.timer);
+            if (s.mouse) {
+              s.el.setPointerCapture?.(e.pointerId);
+              begin(p.id, e.clientY);
+            } else st.current = {};
+          }
+          return;
+        }
+        setDrag((d) => d && { ...d, y: e.clientY, to: targetIndex(d, e.clientY) });
+      },
+      onPointerUp() {
+        const s = st.current;
+        clearTimeout(s.timer);
+        const d = dragRef.current;
+        if (d) {
+          setDrag(null);
+          s.suppress = true;
+          setTimeout(() => (s.suppress = false), 50);
+          if (d.to !== d.from) {
+            const next = [...items];
+            const [m] = next.splice(d.from, 1);
+            next.splice(d.to, 0, m);
+            onCommit(next);
+          }
+        }
+        st.current = s.suppress ? s : {};
+      },
+      onPointerCancel() {
+        clearTimeout(st.current.timer);
+        if (dragRef.current) setDrag(null);
+        st.current = {};
+      },
+      onContextMenu(e) {
+        e.preventDefault();
+      },
+      onClickCapture(e) {
+        if (st.current.suppress) {
+          e.stopPropagation();
+          e.preventDefault();
+          st.current = {};
+        }
+      },
+    };
+  }
+  // how far each row should shift visually
+  function offset(i) {
+    if (!drag) return 0;
+    if (i === drag.from) return drag.y + drag.scroll - drag.startY;
+    const h = drag.rows[drag.from].h;
+    if (drag.from < drag.to && i > drag.from && i <= drag.to) return -h;
+    if (drag.from > drag.to && i >= drag.to && i < drag.from) return h;
+    return 0;
+  }
+  return { drag, bind, offset, listRef };
+}
+
+function Ideas({ pieces, onOpen, onReorder }) {
   const list = [...pieces].sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
+  const { drag, bind, offset, listRef } = useReorder(list, onReorder);
   return (
     <main className="screen">
-      <Header title="Ideas" sub={`${list.length} ideas`} onSettings={onSettings} />
-      <div className="group ideas">
-        {list.map((p) => {
+      <Header title="Ideas" sub={`${list.length} ideas`} />
+      <div className={`group ideas ${drag ? 'sorting' : ''}`} ref={listRef}>
+        {list.map((p, i) => {
           const due = dueInfo(p);
+          const off = offset(i);
+          const lifted = drag?.id === p.id;
           return (
-            <button key={p.id} className="idea" onClick={() => onOpen(p.id)}>
+            <button key={p.id} className={`idea ${lifted ? 'lifted-row' : ''}`} style={off ? { transform: `translateY(${off}px)` } : undefined} onClick={() => onOpen(p.id)} {...bind(p)}>
               <span className="title">
                 {p.title}
                 {p.is_commission && <span className="dot" title="Commission" />}
               </span>
-              {(p.description || due) && (
-                <span className="meta">
-                  {[p.description, due?.label].filter(Boolean).join(' · ')}
-                </span>
-              )}
+              {(p.description || due) && <span className="meta">{[p.description, due?.label].filter(Boolean).join(' · ')}</span>}
             </button>
           );
         })}
@@ -545,7 +689,7 @@ function Ideas({ pieces, onOpen, onSettings }) {
   );
 }
 
-function SignIn({ onOpenSettings }) {
+function SignIn() {
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [err, setErr] = useState(null);
@@ -577,9 +721,6 @@ function SignIn({ onOpenSettings }) {
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
       </form>
-      <button className="link" onClick={onOpenSettings}>
-        Database settings
-      </button>
     </main>
   );
 }
@@ -649,7 +790,7 @@ function PieceSheet({ piece: p, photos, extras, onClose, onPatch, onStage, onSta
       <div className="photos">
         {sorted.map((ph) => (
           <button key={ph.id} className={`photo ${ph.is_primary ? 'primary' : ''}`} onClick={() => setViewer(ph)}>
-            <img src={ph.url} alt="" />
+            <Img url={ph.url} />
           </button>
         ))}
         <button className="photo add" onClick={() => fileRef.current.click()} disabled={busy}>
@@ -870,118 +1011,6 @@ function AddSheet({ mode, extras, onClose, onCreate }) {
           </button>
         </div>
       </form>
-    </Sheet>
-  );
-}
-
-function Settings({ session, scrapped, pieces, photos, extras, onOpen, onClose, onReload }) {
-  const cfg = getConfig();
-  const [url, setUrl] = useState(cfg.url);
-  const [key, setKey] = useState(cfg.key);
-  const [progress, setProgress] = useState(null);
-  const [showScrap, setShowScrap] = useState(false);
-  return (
-    <Sheet onClose={onClose} label="Settings">
-      <h2 className="sheet-title">Settings</h2>
-
-      <h3>Account</h3>
-      {api.demo ? (
-        <p className="muted">Demo mode: nothing is saved.</p>
-      ) : session ? (
-        <div className="row-between">
-          <span className="muted">Signed in as {session.user.email}</span>
-          <button className="btn small" onClick={() => api.signOut()}>
-            Sign out
-          </button>
-        </div>
-      ) : (
-        <p className="muted">{isUsingOldDatabase() ? 'Using the old Bolt database (no sign-in).' : 'Not signed in.'}</p>
-      )}
-
-      <h3>Scrapped pieces ({scrapped.length})</h3>
-      <button className="btn small" onClick={() => setShowScrap(!showScrap)}>
-        {showScrap ? 'Hide' : 'Show'}
-      </button>
-      {showScrap && (
-        <ul className="plain">
-          {scrapped.map((p) => (
-            <li key={p.id}>
-              <button className="link" onClick={() => onOpen(p.id)}>
-                {p.title}
-              </button>{' '}
-              <span className="muted">· {stageLabel(p.stage)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <h3>Backup</h3>
-      <p className="muted">Downloads every piece and photo link as a file.</p>
-      <button
-        className="btn small"
-        onClick={() => {
-          const blob = new Blob([JSON.stringify({ exported_at: new Date().toISOString(), pieces, photos }, null, 2)], { type: 'application/json' });
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = `pots-backup-${new Date().toISOString().slice(0, 10)}.json`;
-          a.click();
-        }}
-      >
-        Download backup
-      </button>
-
-      {!isUsingOldDatabase() && !api.demo && (
-        <>
-          <h3>Copy from the Bolt version</h3>
-          <p className="muted">Copies all pieces, ideas and photos from the old database into this one. Safe to run twice.</p>
-          <button
-            className="btn small"
-            disabled={!!progress && !progress.done}
-            onClick={async () => {
-              try {
-                const r = await api.importFromOld((m) => setProgress({ msg: m }));
-                setProgress({ msg: `Done: ${r.pieces} pieces, ${r.photos} photos.`, done: true });
-                onReload();
-              } catch (e) {
-                setProgress({ msg: `Stopped: ${e.message}`, done: true });
-              }
-            }}
-          >
-            Copy everything
-          </button>
-          {progress && <p className="muted">{progress.msg}</p>}
-        </>
-      )}
-
-      <h3>Database</h3>
-      {extras === false && <p className="muted">Clay, glaze, due dates and stage history are off until the setup SQL is run on this database.</p>}
-      <Field label="Supabase URL">
-        <input value={url} onChange={(e) => setUrl(e.target.value)} />
-      </Field>
-      <Field label="Anon key">
-        <input value={key} onChange={(e) => setKey(e.target.value)} />
-      </Field>
-      <div className="row-btns">
-        <button
-          className="btn small"
-          onClick={() => {
-            setConfig(null);
-            location.reload();
-          }}
-        >
-          Reset
-        </button>
-        <button
-          className="btn small primary"
-          onClick={() => {
-            setConfig({ url: url.trim(), key: key.trim() });
-            location.reload();
-          }}
-        >
-          Save & reload
-        </button>
-      </div>
-      <p className="muted tiny">Jane's pots · v1</p>
     </Sheet>
   );
 }

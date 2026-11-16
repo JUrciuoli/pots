@@ -90,14 +90,15 @@ function makeRemote() {
       const { error } = await sb.from('pieces').delete().eq('id', id);
       if (error) throw error;
     },
-    async uploadBlob(blob) {
+    async uploadBlob(blob, thumb) {
       const name = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}.jpg`;
       const { error } = await sb.storage.from(PHOTO_BUCKET).upload(name, blob, { contentType: 'image/jpeg' });
       if (error) throw error;
+      if (thumb) await sb.storage.from(PHOTO_BUCKET).upload(`thumbs/${name}`, thumb, { contentType: 'image/jpeg' });
       return sb.storage.from(PHOTO_BUCKET).getPublicUrl(name).data.publicUrl;
     },
-    async addPhoto(pieceId, blob, isPrimary) {
-      const url = await this.uploadBlob(blob);
+    async addPhoto(pieceId, { full, thumb }, isPrimary) {
+      const url = await this.uploadBlob(full, thumb);
       if (isPrimary) await sb.from('photos').update({ is_primary: false }).eq('piece_id', pieceId);
       const { data: row, error } = await sb
         .from('photos')
@@ -117,7 +118,7 @@ function makeRemote() {
       if (error) throw error;
       const m = photo.url.match(new RegExp(`/${PHOTO_BUCKET}/(.+)$`));
       if (m && photo.url.startsWith(getConfig().url)) {
-        await sb.storage.from(PHOTO_BUCKET).remove([m[1]]);
+        await sb.storage.from(PHOTO_BUCKET).remove([m[1], `thumbs/${m[1]}`]);
       }
     },
 
@@ -223,7 +224,7 @@ function makeDemo() {
     async deletePiece(id) {
       pieces = pieces.filter((p) => p.id !== id);
     },
-    async addPhoto(pieceId, blob, isPrimary) {
+    async addPhoto(pieceId, { full: blob }, isPrimary) {
       if (isPrimary) photos.forEach((p) => p.piece_id === pieceId && (p.is_primary = false));
       const row = { id: crypto.randomUUID(), piece_id: pieceId, url: URL.createObjectURL(blob), is_primary: !!isPrimary, created_at: new Date().toISOString() };
       photos.push(row);
@@ -243,14 +244,44 @@ function makeDemo() {
 
 export const api = isDemo ? makeDemo() : makeRemote();
 
-/* Shrink phone photos before upload (max 1600px, JPEG). */
-export async function resizeImage(file, max = 1600) {
-  const img = await createImageBitmap(file).catch(() => null);
-  if (!img) return file;
-  const s = Math.min(1, max / Math.max(img.width, img.height));
-  const c = document.createElement('canvas');
-  c.width = Math.round(img.width * s);
-  c.height = Math.round(img.height * s);
-  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-  return new Promise((r) => c.toBlob((b) => r(b || file), 'image/jpeg', 0.85));
+/* Small copy of each photo lives next to it under thumbs/. Lists and the gallery use it. */
+export function thumbUrl(url) {
+  const k = `/${PHOTO_BUCKET}/`;
+  if (!url || !url.includes(k) || url.includes(`${k}thumbs/`)) return url;
+  return url.replace(k, `${k}thumbs/`);
+}
+
+async function decode(file) {
+  try {
+    return await createImageBitmap(file);
+  } catch {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image();
+      img.src = url;
+      await img.decode();
+      return img;
+    } catch {
+      return null;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+}
+
+/* Phone photos are huge (up to 5 MB). Make a 1600px copy to keep and a 480px thumbnail. */
+export async function preparePhoto(file) {
+  const img = await decode(file);
+  if (!img) return { full: file, thumb: null };
+  const w = img.width, h = img.height;
+  const draw = (scale, q) => {
+    const c = document.createElement('canvas');
+    c.width = Math.round(w * scale);
+    c.height = Math.round(h * scale);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return new Promise((r) => c.toBlob((b) => r(b), 'image/jpeg', q));
+  };
+  const full = await draw(Math.min(1, 1600 / Math.max(w, h)), 0.85);
+  const thumb = await draw(Math.min(1, 480 / Math.min(w, h)), 0.8);
+  return { full: full || file, thumb };
 }
