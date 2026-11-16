@@ -183,3 +183,15 @@ h1, .sheet-title, .title-input { font-weight: 500; }
 .row-btns .btn { letter-spacing: 0.12em; padding-left: 10px; padding-right: 10px; }
 .toast { font-family: var(--serif); font-size: 16px; }
 .photo.add span { font-family: var(--sans); text-transform: uppercase; letter-spacing: 0.14em; font-size: 10px; }
+
+/* drag and drop */
+.card-main { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+body.dragging, body.dragging * { -webkit-user-select: none; user-select: none; cursor: grabbing; }
+.stage.drop { border: 1.5px dashed transparent; border-radius: var(--r); padding: 6px 6px 2px; margin-left: -8px; margin-right: -8px; transition: background 0.15s, border-color 0.15s; }
+.stage.drop h2 { margin-left: 2px; }
+.stage.over { border-color: var(--ink); background: var(--rose-soft); }
+.drop-hint { border: 1.5px dashed var(--line); border-radius: var(--r); padding: 18px; text-align: center; color: var(--muted); font-family: var(--serif); font-style: italic; margin-bottom: 8px; }
+.stage.over .drop-hint { border-color: var(--ink); color: var(--ink); }
+.card.lifted { opacity: 0.3; }
+.drag-ghost { position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none; }
+.drag-ghost .card { box-shadow: 0 14px 34px rgba(20, 78, 158, 0.28); background: var(--card); margin: 0; }

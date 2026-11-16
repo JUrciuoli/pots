@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { api, resizeImage, getConfig, setConfig, isUsingOldDatabase } from './db.js';
 import { STAGES, WORK_STAGES, stageLabel, nextStage } from './config.js';
 import { Icon } from './icons.jsx';
@@ -172,7 +172,7 @@ export default function App() {
       {needsSignIn ? (
         <SignIn onOpenSettings={() => setSettings(true)} />
       ) : tab === 'works' ? (
-        <Works pieces={live} photoFor={photoFor} onOpen={setOpenId} onNext={moveStage} loading={loading} error={error} onRetry={load} onSettings={() => setSettings(true)} />
+        <Works pieces={live} photoFor={photoFor} onOpen={setOpenId} onNext={moveStage} onMove={moveStage} loading={loading} error={error} onRetry={load} onSettings={() => setSettings(true)} />
       ) : tab === 'gallery' ? (
         <Gallery pieces={live.filter((p) => p.stage === 'completed')} photoFor={photoFor} onOpen={setOpenId} onSettings={() => setSettings(true)} />
       ) : (
@@ -290,13 +290,133 @@ function Header({ title, sub, onSettings, children }) {
   );
 }
 
-function Works({ pieces, photoFor, onOpen, onNext, loading, error, onRetry, onSettings }) {
+/* Drag and drop between stages.
+   Touch: press and hold a card (~0.3s) to lift it, then drag. A quick swipe still scrolls.
+   Mouse: just drag. */
+function useStageDrag(onDrop) {
+  const [drag, setDrag] = useState(null); // { piece, x, y, w, h, dx, dy, over }
+  const st = useRef({});
+  const dragRef = useRef(null);
+  dragRef.current = drag;
+
+  useEffect(() => {
+    if (!drag) return;
+    const blockScroll = (e) => e.cancelable && e.preventDefault();
+    document.addEventListener('touchmove', blockScroll, { passive: false });
+    document.body.classList.add('dragging');
+    let raf;
+    const tick = () => {
+      const d = dragRef.current;
+      if (d) {
+        const top = 100;
+        const bottom = window.innerHeight - 130;
+        let dy = 0;
+        if (d.y < top) dy = -Math.min(14, Math.ceil((top - d.y) / 5));
+        else if (d.y > bottom) dy = Math.min(14, Math.ceil((d.y - bottom) / 5));
+        if (dy) {
+          window.scrollBy(0, dy);
+          const over = overAt(d.x, d.y);
+          if (over !== d.over) setDrag((v) => v && { ...v, over });
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      document.removeEventListener('touchmove', blockScroll);
+      document.body.classList.remove('dragging');
+      cancelAnimationFrame(raf);
+    };
+  }, [!!drag]);
+
+  const overAt = (x, y) => document.elementFromPoint(x, y)?.closest('[data-stage]')?.dataset.stage ?? null;
+
+  // When dragging starts, empty stages open up; keep the lifted card where the finger is.
+  useLayoutEffect(() => {
+    const a = st.current.anchor;
+    if (drag && a) {
+      const shift = a.el.getBoundingClientRect().top - a.top;
+      if (shift) window.scrollBy(0, shift);
+      st.current.anchor = null;
+    }
+  }, [!!drag]);
+
+  function begin(piece, el, x, y) {
+    const r = el.getBoundingClientRect();
+    st.current.anchor = { el, top: r.top };
+    navigator.vibrate?.(12);
+    setDrag({ piece, x, y, w: r.width, h: r.height, dx: x - r.left, dy: y - r.top, over: piece.stage });
+  }
+
+  function bind(piece) {
+    return {
+      onPointerDown(e) {
+        if (e.button !== 0) return;
+        const el = e.currentTarget;
+        const s = (st.current = { id: e.pointerId, x0: e.clientX, y0: e.clientY, el, piece, mouse: e.pointerType === 'mouse', moved: false });
+        if (!s.mouse) s.timer = setTimeout(() => begin(piece, el, s.x0, s.y0), 320);
+      },
+      onPointerMove(e) {
+        const s = st.current;
+        if (s.id !== e.pointerId) return;
+        const dist = Math.hypot(e.clientX - s.x0, e.clientY - s.y0);
+        if (!dragRef.current) {
+          if (dist > 8) {
+            clearTimeout(s.timer);
+            if (s.mouse) {
+              s.el.setPointerCapture?.(e.pointerId);
+              begin(piece, s.el, e.clientX, e.clientY);
+            } else st.current = {}; // it's a scroll
+          }
+          return;
+        }
+        s.moved = true;
+        s.lx = e.clientX;
+        s.ly = e.clientY;
+        setDrag((d) => d && { ...d, x: e.clientX, y: e.clientY, over: overAt(e.clientX, e.clientY) });
+      },
+      onPointerUp(e) {
+        const s = st.current;
+        clearTimeout(s.timer);
+        const d = dragRef.current;
+        if (d) {
+          const target = overAt(e.clientX, e.clientY) ?? d.over;
+          setDrag(null);
+          s.suppressClick = true;
+          setTimeout(() => (s.suppressClick = false), 50);
+          if (target && target !== d.piece.stage) onDrop(d.piece, target);
+        }
+        st.current = s.suppressClick ? s : {};
+      },
+      onPointerCancel() {
+        clearTimeout(st.current.timer);
+        if (dragRef.current) setDrag(null);
+        st.current = {};
+      },
+      onContextMenu(e) {
+        e.preventDefault();
+      },
+      onClickCapture(e) {
+        if (st.current.suppressClick) {
+          e.stopPropagation();
+          e.preventDefault();
+          st.current = {};
+        }
+      },
+    };
+  }
+  return { drag, bind };
+}
+
+function Works({ pieces, photoFor, onOpen, onNext, onMove, loading, error, onRetry, onSettings }) {
   const work = pieces.filter((p) => p.stage !== 'completed' && p.stage !== 'idea');
+  const { drag, bind } = useStageDrag((p, stage) => onMove(p, stage));
   const groups = WORK_STAGES.map((s) => ({ ...s, items: work.filter((p) => p.stage === s.key).sort((a, b) => (stageSince(a) || a.created_at).localeCompare(stageSince(b) || b.created_at)) }));
   const empty = groups.filter((g) => !g.items.length);
+  const shown = drag ? [...groups, { key: 'completed', label: 'Completed', items: [] }] : groups.filter((g) => g.items.length);
   return (
-    <main className="screen">
-      <Header title="Current Works" sub={loading ? 'Loading…' : `${work.length} piece${work.length === 1 ? '' : 's'} in progress`} onSettings={onSettings} />
+    <main className={`screen ${drag ? 'is-dragging' : ''}`}>
+      <Header title="Current Works" sub={drag ? `Drop ${drag.piece.title} on a stage` : loading ? 'Loading…' : `${work.length} piece${work.length === 1 ? '' : 's'} in progress · hold to drag`} onSettings={onSettings} />
       {error && (
         <div className="notice">
           <p>Couldn't load your pieces. {error}</p>
@@ -304,32 +424,36 @@ function Works({ pieces, photoFor, onOpen, onNext, loading, error, onRetry, onSe
         </div>
       )}
       {!loading && !error && work.length === 0 && <p className="empty-big">Nothing on the shelves. Tap + after your next studio session.</p>}
-      {groups
-        .filter((g) => g.items.length)
-        .map((g) => (
-          <section key={g.key} className="stage">
-            <h2>
-              <span>{g.label.toLowerCase()}</span>
-              <span className="count">{g.items.length}</span>
-            </h2>
-            {g.items.map((p) => (
-              <WorkCard key={p.id} p={p} photo={photoFor[p.id]} onOpen={() => onOpen(p.id)} onNext={() => onNext(p, nextStage(p.stage).key)} />
-            ))}
-          </section>
-        ))}
-      {empty.length > 0 && work.length > 0 && <p className="empties">Empty: {empty.map((g) => g.label.toLowerCase()).join(' · ')}</p>}
+      {shown.map((g) => (
+        <section key={g.key} data-stage={g.key} className={`stage ${drag ? 'drop' : ''} ${drag?.over === g.key && g.key !== drag.piece.stage ? 'over' : ''} ${g.key === 'completed' ? 'done-zone' : ''}`}>
+          <h2>
+            <span>{g.key === 'completed' ? 'completed ✓' : g.label.toLowerCase()}</span>
+            {g.key !== 'completed' && <span className="count">{g.items.length}</span>}
+          </h2>
+          {g.items.map((p) => (
+            <WorkCard key={p.id} p={p} photo={photoFor[p.id]} lifted={drag?.piece.id === p.id} handlers={bind(p)} onOpen={() => onOpen(p.id)} onNext={() => onNext(p, nextStage(p.stage).key)} />
+          ))}
+          {drag && !g.items.length && <div className="drop-hint">{g.key === 'completed' ? 'Drop here when it’s out of the kiln' : 'Drop here'}</div>}
+        </section>
+      ))}
+      {!drag && empty.length > 0 && work.length > 0 && <p className="empties">Empty: {empty.map((g) => g.label.toLowerCase()).join(' · ')}</p>}
+      {drag && (
+        <div className="drag-ghost" style={{ width: drag.w, transform: `translate(${drag.x - drag.dx}px, ${drag.y - drag.dy}px) rotate(-1.5deg)` }}>
+          <WorkCard p={drag.piece} photo={photoFor[drag.piece.id]} ghost />
+        </div>
+      )}
     </main>
   );
 }
 
-function WorkCard({ p, photo, onOpen, onNext }) {
+function WorkCard({ p, photo, onOpen, onNext, handlers, lifted, ghost }) {
   const n = nextStage(p.stage);
   const since = stageSince(p);
   const due = dueInfo(p);
   return (
-    <div className="card">
-      <button className="card-main" onClick={onOpen}>
-        {photo ? <img className="thumb" src={photo.url} alt="" loading="lazy" /> : <span className="thumb ph">{p.title.charAt(0).toUpperCase()}</span>}
+    <div className={`card ${lifted ? 'lifted' : ''}`}>
+      <button className="card-main" onClick={onOpen} {...handlers}>
+        {photo ? <img className="thumb" src={photo.url} alt="" loading="lazy" draggable={false} /> : <span className="thumb ph">{p.title.charAt(0).toUpperCase()}</span>}
         <span className="card-text">
           <span className="title">{p.title}</span>
           <span className="meta">
@@ -339,7 +463,7 @@ function WorkCard({ p, photo, onOpen, onNext }) {
           </span>
         </span>
       </button>
-      {n && (
+      {n && !ghost && (
         <button className="next" onClick={onNext} aria-label={`Move ${p.title} to ${n.label}`}>
           <Icon name="arrow" />
           <span>{n.key === 'completed' ? 'Done' : n.label.split(' ')[0]}</span>
