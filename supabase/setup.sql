@@ -57,9 +57,12 @@ on conflict (id) do update set public = true;
 do $$
 declare r record;
 begin
+  -- remove our old policies and any older ones (e.g. Bolt's) that touch the photo bucket
   for r in select policyname from pg_policies
            where schemaname = 'storage' and tablename = 'objects'
-             and policyname like 'pots:%' loop
+             and (policyname like 'pots:%'
+                  or coalesce(qual, '') like '%piece-photos%'
+                  or coalesce(with_check, '') like '%piece-photos%') loop
     execute format('drop policy %I on storage.objects', r.policyname);
   end loop;
 end $$;

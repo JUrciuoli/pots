@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { api, preparePhoto, thumbUrl, isUsingOldDatabase } from './db.js';
+import { api, preparePhoto, thumbUrl } from './db.js';
 import { STAGES, WORK_STAGES, stageLabel, nextStage } from './config.js';
 import { Icon } from './icons.jsx';
 import Cropper from './Cropper.jsx';
@@ -178,7 +178,7 @@ export default function App() {
   }
 
   const open = pieces.find((p) => p.id === openId);
-  const needsSignIn = session === null && !loading && !error && live.length === 0 && !isUsingOldDatabase();
+  const needsSignIn = !api.demo && session === null;
 
   return (
     <div className="app">
