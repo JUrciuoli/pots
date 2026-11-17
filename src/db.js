@@ -54,7 +54,7 @@ function makeRemote() {
       return data.session;
     },
     onAuth(cb) {
-      const { data } = sb.auth.onAuthStateChange((_e, s) => cb(s));
+      const { data } = sb.auth.onAuthStateChange((e, s) => cb(s, e));
       return () => data.subscription.unsubscribe();
     },
     async signIn(email, password) {
@@ -63,6 +63,14 @@ function makeRemote() {
     },
     async signOut() {
       await sb.auth.signOut();
+    },
+    async sendReset(email) {
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+      if (error) throw error;
+    },
+    async setPassword(password) {
+      const { error } = await sb.auth.updateUser({ password });
+      if (error) throw error;
     },
     hasExtras: () => extras,
     async loadAll() {

@@ -44,6 +44,7 @@ export default function App() {
   const [openId, setOpenId] = useState(null);
   const [adding, setAdding] = useState(null); // 'work' | 'idea'
   const [scrapOpen, setScrapOpen] = useState(false);
+  const [recovery, setRecovery] = useState(false);
   const [toast, setToast] = useState(null);
   const toastTimer = useRef();
 
@@ -68,8 +69,9 @@ export default function App() {
 
   useEffect(() => {
     api.session().then(setSession);
-    const off = api.onAuth((s) => {
+    const off = api.onAuth((s, ev) => {
       setSession(s);
+      if (ev === 'PASSWORD_RECOVERY') setRecovery(true);
       load();
     });
     load();
@@ -182,7 +184,9 @@ export default function App() {
 
   return (
     <div className="app">
-      {needsSignIn ? (
+      {recovery ? (
+        <SetPassword onDone={() => setRecovery(false)} />
+      ) : needsSignIn ? (
         <SignIn />
       ) : tab === 'works' ? (
         <Works pieces={live} photoFor={photoFor} onOpen={setOpenId} onNext={moveStage} onMove={moveStage} loading={loading} error={error} onRetry={load} />
@@ -692,6 +696,7 @@ function Ideas({ pieces, onOpen, onReorder }) {
 }
 
 function SignIn() {
+  const [sent, setSent] = useState(false);
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [err, setErr] = useState(null);
@@ -719,8 +724,58 @@ function SignIn() {
         <input type="email" autoComplete="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
         <input type="password" autoComplete="current-password" placeholder="Password" value={pw} onChange={(e) => setPw(e.target.value)} required />
         {err && <p className="err">{err}</p>}
+        {sent && <p className="muted">Check your email for a link to set a new password.</p>}
         <button className="btn primary" disabled={busy}>
           {busy ? 'Signing in…' : 'Sign in'}
+        </button>
+      </form>
+      <button
+        className="link small-link"
+        onClick={async () => {
+          setErr(null);
+          if (!email.trim()) return setErr('Type your email above first.');
+          try {
+            await api.sendReset(email.trim());
+            setSent(true);
+          } catch (e) {
+            setErr(e.message);
+          }
+        }}
+      >
+        Forgot password?
+      </button>
+    </main>
+  );
+}
+
+function SetPassword({ onDone }) {
+  const [pw, setPw] = useState('');
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <main className="screen signin">
+      <h1>New password</h1>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (pw.length < 8) return setErr('Use at least 8 characters.');
+          setBusy(true);
+          setErr(null);
+          try {
+            await api.setPassword(pw);
+            history.replaceState(null, '', location.pathname);
+            onDone();
+          } catch (e) {
+            setErr(e.message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <input type="password" autoComplete="new-password" placeholder="New password" value={pw} onChange={(e) => setPw(e.target.value)} required />
+        {err && <p className="err">{err}</p>}
+        <button className="btn primary" disabled={busy}>
+          {busy ? 'Saving…' : 'Save password'}
         </button>
       </form>
     </main>

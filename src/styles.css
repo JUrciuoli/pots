@@ -282,3 +282,4 @@ h1 { font-size: 28px; }
 .cropper .chip { color: var(--bg); opacity: 0.75; border: 1px solid rgba(251, 240, 208, 0.35); }
 .cropper .chip.on { background: var(--bg); color: var(--ink); opacity: 1; }
 .file-preview { width: 28px; height: 28px; object-fit: cover; border-radius: 2px; }
+.small-link { margin-top: 18px; font-family: var(--sans); text-transform: uppercase; letter-spacing: 0.16em; font-size: 10px; text-decoration: none; color: var(--muted); }
