@@ -116,7 +116,7 @@ export default function Cropper({ file, onCancel, onDone }) {
       <div className="crop-top">
         <button className="crop-text" onClick={onCancel}>Cancel</button>
         <span>Crop</span>
-        <button className="crop-text strong" onClick={done} disabled={!img || busy}>{busy ? 'Saving…' : 'Done'}</button>
+        <span className="crop-text" aria-hidden="true" style={{ visibility: 'hidden' }}>Cancel</span>
       </div>
       <div className="crop-stage" ref={stageRef} onWheel={onWheel}>
         {img && (
