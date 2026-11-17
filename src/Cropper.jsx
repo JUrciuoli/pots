@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 const SHAPES = [
   { key: 'square', label: 'Square', ratio: 1 },
@@ -109,12 +110,13 @@ export default function Cropper({ file, onCancel, onDone }) {
   }
 
   const zoom = img ? view.s / minScale : 1;
-  return (
+  // Rendered straight into <body> so no panel or scroll area can clip it.
+  return createPortal(
     <div className="cropper" role="dialog" aria-label="Crop photo">
       <div className="crop-top">
         <button className="crop-text" onClick={onCancel}>Cancel</button>
         <span>Crop</span>
-        <button className="crop-text strong" onClick={done} disabled={!img || busy}>{busy ? 'Saving…' : 'Use photo'}</button>
+        <button className="crop-text strong" onClick={done} disabled={!img || busy}>{busy ? 'Saving…' : 'Done'}</button>
       </div>
       <div className="crop-stage" ref={stageRef} onWheel={onWheel}>
         {img && (
@@ -153,7 +155,11 @@ export default function Cropper({ file, onCancel, onDone }) {
             </button>
           ))}
         </div>
+        <button className="crop-use" onClick={done} disabled={!img || busy}>
+          {busy ? 'Saving…' : 'Use photo'}
+        </button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
